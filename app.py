@@ -1,5 +1,6 @@
 from dotenv import load_dotenv
 load_dotenv()
+
 from flask import Flask, request, session, redirect, url_for
 import anthropic
 import random
@@ -12,24 +13,129 @@ client = anthropic.Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
 TOPICS = ["accounting", "valuation", "DCF", "LBO", "M&A", "enterprise value"]
 
+# Shared styles for every page
+BASE_STYLES = """
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1e3a5f">
+<title>Technicals Quiz</title>
+<style>
+    * { box-sizing: border-box; }
+    body {
+        margin: 0;
+        padding: 0;
+        background: #1e3a5f;
+        color: #333;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        min-height: 100vh;
+    }
+    .container {
+        max-width: 700px;
+        margin: 0 auto;
+        padding: 24px 20px;
+    }
+    .card {
+        background: white;
+        border-radius: 16px;
+        padding: 28px 24px;
+        box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+        margin-bottom: 20px;
+    }
+    h1 { color: white; text-align: center; margin: 20px 0 30px; font-size: 32px; }
+    h2 { color: #1e3a5f; margin: 0 0 20px; font-size: 22px; line-height: 1.4; }
+    h3 { color: #1e3a5f; margin: 20px 0 10px; font-size: 18px; }
+    p { line-height: 1.6; margin: 0 0 12px; }
+    .status-bar {
+        display: flex;
+        justify-content: space-between;
+        color: white;
+        font-size: 14px;
+        margin-bottom: 16px;
+        padding: 0 4px;
+    }
+    .topic-tag {
+        display: inline-block;
+        background: #4a90e2;
+        color: white;
+        padding: 6px 14px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: 600;
+        margin-bottom: 16px;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+    }
+    .option-label {
+        display: block;
+        background: #f4f6f9;
+        padding: 16px;
+        margin: 10px 0;
+        border-radius: 10px;
+        cursor: pointer;
+        transition: background 0.15s;
+        font-size: 16px;
+        line-height: 1.5;
+    }
+    .option-label:hover, .option-label:active { background: #e8eef5; }
+    .option-label input { margin-right: 12px; }
+    button, .btn {
+        background: #4a90e2;
+        color: white;
+        border: none;
+        padding: 16px 32px;
+        font-size: 17px;
+        font-weight: 600;
+        border-radius: 12px;
+        cursor: pointer;
+        width: 100%;
+        margin-top: 12px;
+        transition: background 0.15s;
+        text-decoration: none;
+        display: inline-block;
+        text-align: center;
+    }
+    button:hover, .btn:hover { background: #3a7dd0; }
+    .btn-secondary { background: #6c7a89; }
+    .btn-secondary:hover { background: #5a6674; }
+    .result-correct { color: #22c55e; font-size: 24px; font-weight: 700; margin-bottom: 16px; }
+    .result-wrong { color: #ef4444; font-size: 24px; font-weight: 700; margin-bottom: 16px; }
+    .mode-choice, .difficulty-choice {
+        display: block;
+        background: #f4f6f9;
+        padding: 14px 16px;
+        margin: 8px 0;
+        border-radius: 10px;
+        cursor: pointer;
+        font-size: 16px;
+    }
+    .mode-choice input, .difficulty-choice input { margin-right: 10px; }
+    .score-big { font-size: 48px; font-weight: 700; color: #4a90e2; text-align: center; margin: 20px 0; }
+    .percent { font-size: 20px; text-align: center; color: #666; margin-bottom: 20px; }
+</style>
+"""
+
+def page(content):
+    return f"<!DOCTYPE html><html><head>{BASE_STYLES}</head><body><div class='container'>{content}</div></body></html>"
+
 @app.route("/")
 def home():
-    return '''
-    <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: sans-serif;">
+    return page('''
         <h1>Technicals Quiz</h1>
-        <p>20 questions. Pick your mode:</p>
-        <form action="/start" method="post">
-            <label><input type="radio" name="mode" value="mc" checked> Multiple choice only</label><br>
-            <label><input type="radio" name="mode" value="long"> Long answer only</label><br>
-            <label><input type="radio" name="mode" value="mixed"> Mix of both</label><br><br>
-            <button type="submit">Start Quiz</button>
-        </form>
-    </div>
-    '''
+        <div class="card">
+            <h3>Select difficulty</h3>
+            <form action="/start" method="post">
+                <label class="difficulty-choice"><input type="radio" name="difficulty" value="easy"> Easy</label>
+                <label class="difficulty-choice"><input type="radio" name="difficulty" value="medium" checked> Medium</label>
+                <label class="difficulty-choice"><input type="radio" name="difficulty" value="hard"> Hard</label>
+                <button type="submit">Start Quiz</button>
+            </form>
+        </div>
+    ''')
 
 @app.route("/start", methods=["POST"])
 def start():
-    session["mode"] = request.form["mode"]
+    session["difficulty"] = request.form["difficulty"]
     session["question_num"] = 0
     session["score"] = 0
     session["recent_topics"] = []
@@ -46,18 +152,16 @@ def question():
     recent.append(chosen_topic)
     session["recent_topics"] = recent
     
-    mode = session.get("mode", "mixed")
-    if mode == "mc":
-        q_type = "mc"
-    elif mode == "long":
-        q_type = "long"
-    else:
-        q_type = random.choice(["mc", "long"])
+    difficulty = session.get("difficulty", "medium")
+    difficulty_notes = {
+        "easy": "This should be a basic conceptual question that tests foundational understanding. Something a first-year student should be able to answer.",
+        "medium": "This should be a standard interview-level question. Something that would come up in a typical banking analyst interview.",
+        "hard": "This should be a challenging question that tests deeper understanding, edge cases, or nuanced concepts. Something an interviewer would ask to differentiate top candidates."
+    }
     
-    session["current_type"] = q_type
-    
-    if q_type == "mc":
-        prompt = f"""Generate one CONCEPTUAL investment banking technical multiple choice question on the topic of {chosen_topic}.
+    prompt = f"""Generate one CONCEPTUAL investment banking technical multiple choice question on the topic of {chosen_topic}.
+
+Difficulty level: {difficulty}. {difficulty_notes[difficulty]}
 
 This should test understanding of concepts, definitions, relationships, and reasoning. NOT math calculations.
 
@@ -74,153 +178,92 @@ Respond with ONLY valid JSON in this exact format, no markdown, no code blocks, 
   "correct": "A",
   "explanation": "why the correct answer is right"
 }}"""
-        
-        message = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        
-        raw = message.content[0].text.strip()
-        # Strip common markdown wrappers
-        if raw.startswith("```json"):
-            raw = raw[7:]
-        if raw.startswith("```"):
-            raw = raw[3:]
-        if raw.endswith("```"):
-            raw = raw[:-3]
-        raw = raw.strip()
-        
-        data = json.loads(raw)
-        
-        session["current_question"] = data["question"]
-        session["current_options"] = data["options"]
-        session["current_correct"] = data["correct"]
-        session["current_explanation"] = data["explanation"]
-        
-        options_html = "".join([f'<label><input type="radio" name="user_answer" value="{k}" required> {k}) {v}</label><br>' for k, v in data["options"].items()])
-        
-        return f'''
-        <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: sans-serif;">
-            <p>Question {session["question_num"] + 1} of 20 | Score: {session["score"]}</p>
+    
+    message = client.messages.create(
+        model="claude-sonnet-4-5",
+        max_tokens=1024,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    raw = message.content[0].text.strip()
+    if raw.startswith("```json"):
+        raw = raw[7:]
+    if raw.startswith("```"):
+        raw = raw[3:]
+    if raw.endswith("```"):
+        raw = raw[:-3]
+    raw = raw.strip()
+    
+    data = json.loads(raw)
+    
+    session["current_question"] = data["question"]
+    session["current_options"] = data["options"]
+    session["current_correct"] = data["correct"]
+    session["current_explanation"] = data["explanation"]
+    session["current_topic"] = chosen_topic
+    
+    options_html = "".join([f'<label class="option-label"><input type="radio" name="user_answer" value="{k}" required> <strong>{k})</strong> {v}</label>' for k, v in data["options"].items()])
+    
+    return page(f'''
+        <div class="status-bar">
+            <span>Question {session["question_num"] + 1} of 20</span>
+            <span>Score: {session["score"]}</span>
+        </div>
+        <div class="card">
+            <span class="topic-tag">{chosen_topic}</span>
             <h2>{data["question"]}</h2>
             <form action="/answer" method="post">
-                {options_html}<br>
+                {options_html}
                 <button type="submit">Submit</button>
             </form>
         </div>
-        '''
-    else:
-        prompt = f"""Generate one investment banking technical interview question on the topic of {chosen_topic}.
-
-Format your response exactly like this, with no markdown, no asterisks, no pound signs, and no bullet points:
-
-QUESTION: [the question]
-ANSWER: [the correct answer, using clear step-by-step math. Use the word 'minus' instead of the minus symbol.]"""
-        
-        message = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=1024,
-            messages=[{"role": "user", "content": prompt}]
-        )
-        text = message.content[0].text
-        
-        question_part = text.split("ANSWER:")[0].replace("QUESTION:", "").strip()
-        answer_part = text.split("ANSWER:")[1].strip()
-        
-        session["current_question"] = question_part
-        session["current_answer"] = answer_part
-        
-        return f'''
-        <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: sans-serif;">
-            <p>Question {session["question_num"] + 1} of 20 | Score: {session["score"]}</p>
-            <h2>{question_part}</h2>
-            <form action="/answer" method="post">
-                <textarea name="user_answer" rows="6" cols="60" placeholder="Type your answer" required></textarea><br><br>
-                <button type="submit">Submit</button>
-            </form>
-        </div>
-        '''
+    ''')
 
 @app.route("/answer", methods=["POST"])
 def answer():
     user_answer = request.form["user_answer"]
-    q_type = session.get("current_type")
     session["question_num"] = session.get("question_num", 0) + 1
     
-    if q_type == "mc":
-        correct = session["current_correct"]
-        is_correct = user_answer.upper() == correct.upper()
-        if is_correct:
-            session["score"] = session.get("score", 0) + 1
-        
-        result_text = "Correct!" if is_correct else f"Wrong. Correct answer: {correct}"
-        
-        options = session["current_options"]
-        options_display = "".join([f'<p>{k}) {v}</p>' for k, v in options.items()])
-        
-        return f'''
-        <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: sans-serif;">
-            <h2>{result_text}</h2>
-            <p><strong>Question:</strong> {session["current_question"]}</p>
+    correct = session["current_correct"]
+    is_correct = user_answer.upper() == correct.upper()
+    if is_correct:
+        session["score"] = session.get("score", 0) + 1
+    
+    result_class = "result-correct" if is_correct else "result-wrong"
+    result_text = "Correct" if is_correct else f"Wrong. Correct answer: {correct}"
+    
+    options = session["current_options"]
+    options_display = "".join([f'<p><strong>{k})</strong> {v}</p>' for k, v in options.items()])
+    
+    return page(f'''
+        <div class="status-bar">
+            <span>Question {session["question_num"]} of 20</span>
+            <span>Score: {session["score"]}</span>
+        </div>
+        <div class="card">
+            <div class="{result_class}">{result_text}</div>
+            <span class="topic-tag">{session["current_topic"]}</span>
+            <h2>{session["current_question"]}</h2>
             {options_display}
             <p><strong>Your answer:</strong> {user_answer}</p>
             <h3>Explanation</h3>
-            <div style="white-space: pre-wrap;">{session["current_explanation"]}</div>
-            <br>
-            <a href="/question"><button>Next Question</button></a>
+            <p>{session["current_explanation"]}</p>
+            <a href="/question" class="btn">Next Question</a>
         </div>
-        '''
-    else:
-        grading = client.messages.create(
-            model="claude-sonnet-4-5",
-            max_tokens=1024,
-            messages=[{
-                "role": "user",
-                "content": f"""Question: {session["current_question"]}
-
-Correct answer: {session["current_answer"]}
-
-My answer: {user_answer}
-
-Grade my answer. First, say whether I got the core answer and reasoning correct. Do not penalize informal phrasing. Only flag actual conceptual errors. At the end, give the full polished interview version.
-
-Also, on the very first line, output just the word CORRECT or WRONG based on whether I got the mechanics right.
-
-Do not use any markdown formatting."""
-            }]
-        )
-        feedback = grading.content[0].text
-        
-        first_line = feedback.split("\n")[0].strip().upper()
-        is_correct = "CORRECT" in first_line and "WRONG" not in first_line
-        if is_correct:
-            session["score"] = session.get("score", 0) + 1
-        
-        return f'''
-        <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: sans-serif;">
-            <h2>{"Correct!" if is_correct else "Wrong."}</h2>
-            <p><strong>Question:</strong> {session["current_question"]}</p>
-            <p><strong>Your answer:</strong> {user_answer}</p>
-            <h3>Feedback</h3>
-            <div style="white-space: pre-wrap;">{feedback}</div>
-            <br>
-            <a href="/question"><button>Next Question</button></a>
-        </div>
-        '''
+    ''')
 
 @app.route("/results")
 def results():
     score = session.get("score", 0)
-    return f'''
-    <div style="max-width: 800px; margin: 0 auto; padding: 20px; font-family: sans-serif;">
+    percent = round(score/20*100)
+    return page(f'''
         <h1>Quiz Complete</h1>
-        <h2>Final Score: {score} / 20</h2>
-        <p>{round(score/20*100)}%</p>
-        <br>
-        <a href="/"><button>New Quiz</button></a>
-    </div>
-    '''
+        <div class="card">
+            <div class="score-big">{score} / 20</div>
+            <div class="percent">{percent}%</div>
+            <a href="/" class="btn">New Quiz</a>
+        </div>
+    ''')
 
 if __name__ == "__main__":
     app.run(debug=True)
